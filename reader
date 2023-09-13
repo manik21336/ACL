@@ -1,0 +1,113 @@
+// A C++ program that serves as a sudo-like program
+// It accepts command-line arguments, such as the command to execute and its arguments
+// It checks the user's identity and password, and executes the command with root privileges
+// It handles some possible corner cases, such as invalid arguments, wrong password, permission denied, etc.
+
+#include <iostream> // Include the input/output stream library for printing and reading data
+#include <string.h>
+#include <unistd.h> // Include the POSIX operating system API library for system calls
+#include <sys/types.h> // Include the library for data types used by system calls
+#include <sys/wait.h> // Include the library for waiting for process termination
+#include <pwd.h> // Include the library for accessing password database entries
+#include <shadow.h> // Include the library for accessing shadow password database entries
+#include <crypt.h> // Include the library for encrypting passwords
+
+using namespace std; // Use the standard namespace for convenience
+
+// A function that checks if the user's password matches the one stored in the shadow file
+bool check_password(const char* username, const char* password) {
+    // Get the user's entry from the shadow file
+    struct spwd* sp = getspnam(username);
+    if (sp == NULL) {
+        cerr << "Error: Cannot get user's entry from shadow file." << endl;
+        return false;
+    }
+    // Get the dencrypted password from the entry
+    const char* encrypted = sp->sp_pwdp;
+    // Encrypt the given password using the same salt as the encrypted password
+    const char* salt = encrypted;
+    const char* hashed = crypt(password, salt);
+    if (hashed == NULL) {
+        cerr << "Error: Cannot encrypt password." << endl;
+        return false;
+    }
+    // Compare the encrypted passwords
+    return strcmp(encrypted, hashed) == 0;
+}
+
+// A function that executes a command with root privileges
+void execute_command(int argc, char* argv[]) {
+    // Get the real user ID of the caller
+    uid_t uid = getuid();
+    // Get the user's name from the real user ID
+    struct passwd* pw = getpwuid(uid);
+    if (pw == NULL) {
+        cerr << "Error: Cannot get user's name from user ID." << endl;
+        exit(1);
+    }
+    const char* username = pw->pw_name;
+    // Prompt the user for password
+    cout << "[sudo] password for " << username << ": ";
+    // Disable echo to hide the password input
+    system("stty -echo");
+    // Read the password from standard input
+    string password;
+    getline(cin, password);
+    // Enable echo again
+    system("stty echo");
+    cout << endl;
+    // Check if the password is correct
+    if (!check_password(username, password.c_str())) {
+        cerr << "Sorry, try again." << endl;
+        exit(1);
+    }
+    // Set the effective user ID to root
+    if (seteuid(0) == -1) {
+        cerr << "Error: Cannot set effective user ID to root." << endl;
+        exit(1);
+    }
+    // Execute the command with its arguments using execvp
+    if (execvp(argv[1], argv + 1) == -1) {
+        cerr << "Error: Cannot execute command: " << argv[1] << endl;
+        exit(1);
+    }
+}
+
+int main(int argc, char* argv[]) {
+    // Check if there are enough arguments
+    if (argc < 2) {
+        cerr << "Usage: " << argv[0] << " command [arguments]" << endl;
+        exit(1);
+    }
+    
+     // Fork a child process to execute the command
+     pid_t pid = fork();
+     if (pid == -1) {
+         cerr << "Error: Cannot fork a child process." << endl;
+         exit(1);
+     }
+     else if (pid == 0) {
+         // Child process
+         execute_command(argc, argv);
+     }
+     else {
+         // Parent processd
+         // Wait for the child process to finish
+         int status;
+         if (waitpid(pid, &status, 0) == -1) {
+             cerr << "Error: Cannot wait for child process." << endl;
+             exit(1);
+         }
+         // Check if the child process exited normally
+         if (WIFEXITED(status)) {
+             // Get the exit code of the child process
+             int code = WEXITSTATUS(status);
+             cout << "Command exited with code: " << code << endl;
+         }
+         else {
+             cout << "Command terminated abnormally." << endl;
+         }
+     }
+
+     return 0;
+}
